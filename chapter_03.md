@@ -531,3 +531,401 @@ GCC汇编代码如下：
 
 
 
+
+## 3.6 控制
+
+
+
+### 3.6.1 条件码
+
+除了整数寄存器，CPU还维护了一组单个位的**条件码（condition code）寄存器**，作用是描述最近算数或逻辑操作的属性。
+
+可以使用这一组寄存器来执行条件分支指令。
+
+最常用的条件码有：
+
+- CF：进位标志。最近操作使最高位产生了进位则为1。（可以用来检查无符号操作的溢出）
+- ZF：零标志。最近的操作得出的结果为0。
+- SF：符号标志。最IN的操作得到的结果为负数。
+- OF：溢出标志。最近的操作导致一个补码溢出。
+
+> 比如：一条ADD指令完成等待与C表达式t=a+b。则根据以下C表达式来设置条件码：
+>
+> ![p136](chapter03.assets/image-20241118122549811.png)
+>
+> ```
+> (a<0 == b<0) && (t<0 !=a<0)
+> ```
+>
+> 表达式含义是：a和b同号，t和a不同号 结果才为true
+
+可以改变条件码的指令有：**算数指令，逻辑指令 、CMP指令和TEST指令。**
+
+> 注意：leaq指令不改变任何条件码，因为他是用来进行地址计算的。
+
+CMP指令和TEST指令只设置条件码，而不改变其他寄存器的值。
+
+![3-13](chapter03.assets/image-20241118142111906.png)
+
+> 例如：testq %rax，%rax用来检查%rax是负数，零还是正数。
+
+### 3.6.2 访问条件码
+
+条件码不能直接读取，常用的使用方法有三条：
+
+1. 可以根据条件码的某种组合将一个字节设置为0或1
+2. 可以条件跳转到程序的某个其他部分。
+3. 可以有条件地传送数据。
+
+对于第一种情况所对应的一整类指令称为SET指令
+
+![3-14](chapter03.assets/image-20241119092429352.png)
+
+> 关于set指令需要注意：
+>
+> - 目的操作数D是低位单字节寄存器之一，或是一个字节的内存位置。指令会将这个字节设置为0或1。此时为了得到一个32位或者64位结果，必须将高位清零。
+> - 一个计算C语言表达式a<b的典型指令序列如下所示：
+>
+> ![p137](chapter03.assets/image-20241119092652733.png)
+
+如何理解上述set指令的含义：
+
+1. sete 即“当相等时设置（set when equal）”:当a=b时，a-b = 0 因此零标志位就表示相等
+2. setl 即：“当小于时设置” 
+   - 当没有发生溢出时，OF设置为0就表示无溢出，a-b<0 时，a<b 故SF设置为1. 当a-b>=0时，SF设置为0.
+   - 当有溢出发生时，OF设置为1，此时 a-b>0（负溢出） 时a<b ；而当a-b<0（正溢出时）a>b。故当OF被设置为1时，当且仅当SF被设置为0，有a<b
+3. 对于无符号比较测试，现在a和b时变量a和b的无符号形式表示的整数。在执行t = a-b时，当a-b<0，CMP指令会设置进位标志。因而无符号比较使用的是进位标志和零标志的组合。
+
+
+
+### 3.6.3 跳转指令
+
+跳转指令-JUMP会导致执行切换到程序中一个全新的位置。
+
+跳转目的通常用一个标号（label）指明。在产生目标文件时，汇编器会确定所有带标号指令的地址，并将（跳转目标）编码为跳转指令的一部分。
+
+- 直接跳转：跳转的目标作为指令的一部分编码，在汇编中，直接跳转时给出一个标号作为跳转目标。
+
+```
+jump .L1
+```
+
+
+
+- 间接跳转：跳转目标从寄存器或者内存中读取。
+
+```
+jump *%rax		//以寄存器%rax中的值作为跳转目标
+jump *(%rax)	//以%rax中的值作为读地址，从内存中读出跳转目标
+```
+
+![3-15](chapter03.assets/image-20241119112551511.png)
+
+> 上述表中跳转指令都是有条件地，他会根据条件码的某种组合完成跳转。
+
+### 3.6.4 跳转指令编码
+
+理解跳转指令的目标如何编码对理解链接过程非常重要。
+
+在汇编代码中，跳转目标用符号编号书写，汇编器以及后来的连接器会产生跳转目标适当的编码。
+
+跳转指令有几种不同的编码：
+
+- PC相对的编码（最常用）：他会将目标指令的地址与紧跟在跳转指令后面那条指令的地址之间的差作为编码。地址的偏移量可以编码为1,2，或4个字节。
+- 绝对地址：用4个字节直接指定编码。
+
+下面是一个PC相对寻址的例子：
+
+![p140](chapter03.assets/image-20241119113023270.png)
+
+反汇编格式如下：
+
+![p140](chapter03.assets/image-20241119113036512.png)
+
+> 第2行跳转指令的跳转目标指明为 0x8 .第五行跳转目标是0x5.观察上述编码 第一条跳转指令的跳转目标为0x3 + 下一条的指令（第3行）指令地址 0x5 = 0x8
+>
+> 第二条跳转指令 的跳转目标为0x5  = 0xf8 (10进制-8)+下一条指令的指令地址：0xd  。  即第3行的指令的地址。
+
+下面是链接后的反汇编版本：
+
+![p140](chapter03.assets/image-20241119113610723.png)
+
+其跳转地址和上述代码是相同的。
+
+### 3.6.5 用条件控制来实现条件分支
+
+![3-16](chapter03.assets/image-20241119113719268.png)
+
+C语言中if-else语句的通用形式：
+
+```cpp
+if(test-expr)
+    then-statement
+else
+    else-statement
+        
+```
+
+汇编通常用下面的形式：
+
+```
+t = test-expr;
+if(!t)
+   goto false;
+then-statement
+goto done;
+false:
+   else-statement;
+done:
+```
+
+> 练习题：根据下面的汇编代码补充C代码：
+>
+> ```assembly
+> root@canppx00003:~/wfd/cpp_code/chapter03# objdump -d demo_3_18.o
+> 
+> demo_3_18.o:     file format elf64-x86-64
+> 
+> 
+> Disassembly of section .text:
+> 
+> 0000000000000000 <test>:
+>    0:   f3 0f 1e fa             endbr64
+>    4:   48 8d 04 37             lea    (%rdi,%rsi,1),%rax
+>    8:   48 01 d0                add    %rdx,%rax
+>    b:   48 83 ff fd             cmp    $0xfffffffffffffffd,%rdi
+>    f:   7d 15                   jge    26 <test+0x26>
+>   11:   48 39 d6                cmp    %rdx,%rsi
+>   14:   7d 08                   jge    1e <test+0x1e>
+>   16:   48 89 f8                mov    %rdi,%rax
+>   19:   48 0f af c6             imul   %rsi,%rax
+>   1d:   c3                      ret
+>   1e:   48 89 f0                mov    %rsi,%rax
+>   21:   48 0f af c2             imul   %rdx,%rax
+>   25:   c3                      ret
+>   26:   48 83 ff 02             cmp    $0x2,%rdi
+>   2a:   7e 07                   jle    33 <test+0x33>
+>   2c:   48 89 f8                mov    %rdi,%rax
+>   2f:   48 0f af c2             imul   %rdx,%rax
+>   33:   c3                      ret
+> 
+> ```
+>
+> c代码如下：
+>
+> ```cpp
+> 
+> long test(long x,long y,long z){
+>     long val = x+y+z;
+>     if(x<-3){
+>         if(y<z)
+>             val = x*y;
+>         else
+>             val = y*z;
+> 
+>     }else if(x>2){
+>         val = x*z;
+>     }
+>     return val;
+> }
+> ```
+>
+> 
+
+
+
+### 3.6.6用条件传送实现分支条件
+
+实现条件操作的传统方法是使用控制的条件转移。一种替代策略是使用数据的条件转移。条件传送使用场景受限，但是他更符合现代处理器的性能特性。
+
+下面的是使用条件传送的代码示例：
+
+![3.17](chapter03.assets/image-20241120104257363.png)
+
+
+
+> 为什么条件数据传送比条件控制转移的代码性能好？
+>
+> 由于处理器是使用流水线来获取高性能。在一个时钟周期处理一条指令的一小部分。当使用条件控制时，如果条件不满足时。后续加载到cpu中的指令有一部分会被跳过，跳过的部分会浪费一分部时钟周期（15~30个）。
+
+条件传送会使用到cmove指令，cmov指令的结构和含义如下：
+
+![3.18](chapter03.assets/image-20241120104627501.png)
+
+使用条件传送指令处理器无需预测测试结果就可以执行传送代码。
+
+考虑下面的条件表达式和复制的通用形式：
+
+```c
+v = test-expr ? then-expr : else-expr
+```
+
+用条件控制转移的标准方式来编译这个表达式，结果如下：
+
+```c
+if(~test-expr)
+	goto false;
+v = then-expr;
+goto done;
+false:
+	v = else-expr;
+done:
+```
+
+使用条件传送来编译，形式如下：
+
+```c
+v = then-expr;
+ve = else-expr;
+t = test-expr;
+if(!t) v = ve;
+```
+
+不是所有的表达式都可以用条件传送来编译。then-expr和else-expr都求值，且表达式中的任意一个可能产生错误条件或者副作用，就会导致非法行为。例如下面的例子：
+
+```cpp
+long cread(long *xp){
+    return (xp ? *xp:0);
+}
+```
+
+使用条件传送汇编代码如下：
+
+![p148](chapter03.assets/image-20241120105304475.png)
+
+> 上述实现是非法的，因为测试位假时，即xp是空指针，但是movq指令对xp的间接引用还是发生了，会导致一个间接引用为空指针的错误。所以必须使用分支代码来编译这段代码。
+
+总的来说，条件数据传送提供了一种用条件控制转移来实现条件操作的替代策略。他只能用于非常受限的情况。而且与现代处理器的运行方式更契合。
+
+
+
+## 3.6.7 循环
+
+#### 1.do-while循环
+
+通用形式如下：
+
+```cpp
+do
+	body-statement
+	while(test-expr)
+```
+
+这种形式可以被翻译成如下所示的条件和goto语句：
+
+```cpp
+loop:
+	body-statement
+	t = test-expr;
+	if(t)
+		goto loop;
+```
+
+![3-19](chapter03.assets/image-20241120160652108.png)
+
+#### 2.while循环
+
+通用形式如下：
+
+```cpp
+while(test-expr)
+	body-statement
+```
+
+Gcc在代码生成中使用两种方式翻译while循环。
+
+- 方式1：跳转到中间，执行一个无条件跳转到循环结尾的测试，以此来执行初始的测试。
+
+```cpp
+goto test;
+loop:
+	body-statement;
+test:
+	t = test-expr;
+	if(t)
+		goto loop;
+```
+
+![3-20](chapter03.assets/image-20241120161101625.png)
+
+- 方式2：称之为guarded-do，受限采用条件分支，如果初始条件不成立就跳过循环，把代码编程do-while循环。 当使用较高优化登记编译时，例如使用选项 -O1，Gcc会采用这种策略。
+
+可以翻译为do-while
+
+```cpp
+t = test-expr;
+if(!t)
+	goto done;
+do
+	body-statement
+	while(test-expr);
+done;
+```
+
+也可以翻译为goto格式：
+
+```cpp
+t = test-expr;
+if(!t)
+	goto done;
+loop:
+	body-statement
+	t = test-expr;
+	if(t)
+		goto loop;
+done;
+```
+
+
+
+#### 3.for循环
+
+for循环的通用定时如下：
+
+```cpp
+for(init-expr;test-expr;update-expr)
+    body-statement
+```
+
+可以使用while循环转换:
+
+```cpp
+init-expr;
+while(test-expr){
+    body-statement
+    update-expr;
+}
+```
+
+GCC为for循环产生的代码是while循环的两个中翻译之一，这取决于优化登记。
+
+跳转到中间策略会得到如下goto代码：
+
+```
+init-expr
+goto test;
+loop:
+	body-statement;
+	update-expr
+test:
+	t = test-expr;
+	if(t)
+		goto loop;
+```
+
+而guarded-do策略得到：
+
+```cpp
+init-expr
+t = test-expr;
+if(!t)
+	goto done;
+do
+	body-statement
+    update-expr
+    t=test-expr;
+	if(t)
+        goto loop;
+done;
+```
+

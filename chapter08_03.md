@@ -326,4 +326,125 @@ int main()
 <img src="https://github.com/wangfud/CSAPP_note_0611/raw/master/.gitbook/assets/08-31%20%E4%BF%A1%E5%8F%B7%E5%A4%84%E7%90%86%E7%A8%8B%E5%BA%8F%E5%8F%AF%E4%BB%A5%E8%A2%AB%E5%85%B6%E4%BB%96%E4%BF%A1%E5%8F%B7%E5%A4%84%E7%90%86%E7%A8%8B%E5%BA%8F%E4%B8%AD%E6%96%AD.png" alt="图 8-31 信号处理程序可以被其他信号处理程序中断" style="zoom:67%;" />
 
 > 如图 8-31 所示。在这个例子中，主程序捕获到信号 s，该信号会中断主程序，将控制转移到处理程序 S。S 在运行时，程序捕获信号 t≠s，该信号会中断 S，控制转移到处理程序 T。当 T 返回时，S 从它被中断的地方继续执行。最后，S 返回，控制传送回主程序，主程序从它被中断的地方继续执行。
+### 8.5.4 阻塞和解除阻塞信号
+
+Linux 提供阻塞信号的隐式和显式的机制：
+
+- **隐式阻塞机制。**内核默认阻塞任何当前处理程序正在处理信号类型的待处理的信号。
+
+  > 例如，图 8-31 中，假设程序捕获了信号 s，当前正在运行处理程序 S。如果发送给该进程另一个信号 s，那么直到处理程序 S 返回，s 会变成待处理而没有被接收。
+
+- **显式阻塞机制。**应用程序可以使用 sigprocmask 函数和它的辅助函数，明确地阻塞和解除阻塞选定的信号。
+
+```c
+#include <signal.h>
+
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+int sigemptyset(sigset_t *set);
+int sigfillset(sigset_t *set);
+int sigaddset(sigset_t *set, int signum);
+int sigdelset(sigset_t *set, int signum);
+//返回；如果成功则为 0，若出错则为 -1。
+
+int sigismember(const sigset_t *set, int signum);
+// 返回：若 signum 是 set 的成员则为 1，如果不是则为 0，若出错则为 -1。
+```
+
+#### sigprocmask
+
+> `sigprocmask` 是一个用于操作信号掩码（signal mask）的系统调用。它允许你查看、修改或设置进程的信号掩码，进而控制哪些信号可以被递送到进程。
+>
+> ##### 函数原型：
+>
+> ```c
+> int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 > 
+> ```
+>
+> ##### 参数说明：
+>
+> 1. **`how`**：指定如何修改信号掩码，有三个选项：
+>    - **`SIG_BLOCK`**：将 `set` 中的信号添加到当前的信号掩码中，从而阻塞这些信号。即阻止这些信号的递送。
+>    - **`SIG_UNBLOCK`**：将 `set` 中的信号从当前信号掩码中移除，解除阻塞这些信号。解除对这些信号的屏蔽，允许信号递送。
+>    - **`SIG_SETMASK`**：将进程的信号掩码替换为 `set` 中的信号集合，完全覆盖当前信号掩码。
+> 2. **`set`**：指向 `sigset_t` 类型的信号集，用于指定要操作的信号集合。该集合包含要被阻塞、解除阻塞或用于替换当前信号掩码的信号。
+> 3. **`oldset`**：指向一个 `sigset_t` 变量，用来保存操作之前的信号掩码。如果不关心旧信号掩码，可以传递 `NULL`。
+>
+> ##### 返回值：
+>
+> - **成功时**：返回 `0`。
+> - **失败时**：返回 `-1`，并设置 `errno` 以指示错误。
+>
+> ### `sigset_t` 类型：
+>
+> `sigset_t` 是一个用于表示信号集合的数据类型，通常它是一个位掩码，用于表示哪些信号是“有效”的。你可以使用 `sigemptyset`、`sigaddset` 和 `sigfillset` 等函数来操作 `sigset_t` 变量。
+>
+> ##### 常用信号操作函数：
+>
+> - **`sigemptyset(sigset_t \*set)`**：初始化一个信号集合，使其为空（没有任何信号）。
+>
+> - **`sigaddset(sigset_t \*set, int signo)`**：将信号 `signo` 添加到信号集合 `set` 中。
+>
+> - **`sigdelset(sigset_t \*set, int signo)`**：从信号集合 `set` 中删除信号 `signo`。
+
+例如，图 8-32 展示了如何用 sigprocmask 来临时阻塞接收 SIGINT 信号。
+
+```c
+sigset_t mask, prev_mask;
+
+Sigemptyset(&mask);
+Sigaddset(&mask, SIGINT);
+
+/* Block SIGINT and save previous blocked set */
+Sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+.
+.  // Code region that will not be interrupted by SIGINT
+.
+/* Restore previous blocked set, unblocking SIGINT */
+Sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+```
+
+> ##### 📌 **1️⃣ 什么是“阻塞进程的信号”？**
+>
+> **阻塞信号**是指 **暂时屏蔽（不处理）某些信号** 的机制。
+>
+> - **信号**（`signal`） → 操作系统发送给进程的异步通知
+> - **阻塞信号** → **信号来了，但暂时不处理，等解除阻塞后再处理**
+>
+> ##### 📌 **2️⃣ 为什么要阻塞信号？**
+>
+> **目的是**：
+>
+> - 避免**在关键代码区**（临界区）**被异步中断**
+> - 保证 **数据一致性**
+> - **防止竞争条件（Race Condition）**
+> - 保持进程状态**可控**
+>
+> ##### 📌 **3️⃣ 应用场景**
+>
+> | 场景                             | 原因                                     |
+> | -------------------------------- | ---------------------------------------- |
+> | **修改全局变量时**               | 避免信号处理函数同时访问导致数据不一致   |
+> | **信号处理函数内部再接收到信号** | 避免嵌套处理，导致栈溢出或逻辑混乱       |
+> | **事务型操作**                   | 保证一系列操作要么全部完成，要么全部不做 |
+>
+> ##### 📌 **5️⃣ 常见 API**
+>
+> **在 C 语言/Linux 中：**
+>
+> ```c
+> sigprocmask(SIG_BLOCK, &set, NULL);    // 阻塞指定信号
+> sigprocmask(SIG_UNBLOCK, &set, NULL);  // 解除阻塞
+> sigpending(&set);                      // 查看哪些信号被挂起
+> ```
+>
+> **Python 示例（仅部分信号支持）：**
+>
+> ```python
+> import signal
+> 
+> signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+> # 关键代码
+> signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
+> ```
+

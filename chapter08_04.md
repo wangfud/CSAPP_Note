@@ -1,4 +1,111 @@
+```c
+/* WARNING: This code is buggy! */
+
+void handler1(int sig)
+{
+    int olderrno = errno;
+
+    if ((waitpid(-1, NULL, 0)) < 0)
+        sio_error("waitpid error");
+    Sio_puts("Handler reaped child\n");
+    Sleep(1);
+    errno = olderrno;
+}
+
+int main()
+{
+    int i, n;
+    char buf[MAXBUF];
+
+    if (signal(SIGCHLD, handler1) == SIG_ERR)
+        unix_error("signal error");
+
+    /* Parent creates children */
+    for (i = 0; i < 3; i++) {
+        if (Fork() == 0) {
+            printf("Hello from child %d\n", (int)getpid());
+            exit(0);
+        }
+    }
+
+    /* Parent waits for terminal input and then processes it */
+    if ((n = read(STDIN_FILENO, buf, sizeof(buf))) < 0)
+        unix_error("read");
+
+    printf("Parent processing input\n");
+    while (1)
+        ;
+
     exit(0);
+
+```
+
+程序signal1是有缺陷的，因为它假设信号是排队的。
+
+图 8-36 中的 signal1 程序看起来相当简单。然而，当在 Linux 系统上运行它时，我们得到如下输出：
+
+```c
+linux> ./signal1
+Hello from child 14073
+Hello from child 14074
+Hello from child 14075
+Handler reaped child
+Handler reaped child
+CR
+Parent processing input
+```
+
+从输出中我们注意到，尽管发送了 3 个 SIGCHLD 信号给父进程，但是其中只有两个信号被接收了，因此父进程只是回收了两个子进程。如果挂起父进程，我们看到，实际上子进程 14075 没有被回收，它成了一个僵死进程（在 ps 命令的输出中由字符串 “defunct” 表明）：
+
+```c
+Ctrl+Z
+Suspended
+linux> ps t
+  PID TTY   STAT   TIME COMMAND
+  .
+  .
+  .
+14072 pts/3 T      0:02 ./signal1
+14075 pts/3 Z      0:00 [signal1] <defunct>
+14076 pts/3 R+     0:00 ps t
+```
+
+> 哪里出错了呢？问题就在于我们的代码没有解决信号不会排队等待这样的情况。所发生的情况是：父进程接收并捕获了第一个信号。当处理程序还在处理第一个信号时，第二个信号就传送并添加到了待处理信号集合里。然而，因为 SIGCHLD 信号被 SIGCHLD 处理程序阻塞了，所以第二个信号就不会被接收。此后不久，就在处理程序还在处理第一个信号时，第三个信号到达了。因为已经有了一个待处理的 SIGCHLD，第三个 SIGCHLD 信号会被丢弃。一段时间之后，处理程序返回，内核注意到有一个待处理的 SIGCHLD 信号，就迫使父进程接收这个信号。父进程捕获这个信号，并第二次执行处理程序。在处理程序完成对第二个信号的处理之后，已经没有待处理的 SIGCHLD 信号了，而且也绝不会再有，因为第三个 SIGCHLD 的所有信息都已经丢失了。
+
+**由此得到的重要教训是，不可以用信号来对其他进程中发生的事件计数。**
+
+为了修正这个问题，我们必须回想一下，存在一个待处理的信号只是暗示自进程最后一次收到一个信号以来，至少已经有一个这种类型的信号被发送了。所以我们必须修改 SIGCHLD 的处理程序，<u>使得每次 SIGCHLD 处理程序被调用时，回收尽可能多的僵死子进程</u>。图 8-37 展示了修改后的 SIGCHLD 处理程序。
+
+```c
+void handler2(int sig)
+{
+    int olderrno = errno;
+
+    while (waitpid(-1, NULL, 0) > 0) {
+        Sio_puts("Handler reaped child\n");
+    }
+    if (errno != ECHILD)
+        Sio_error("waitpid error");
+    Sleep(1);
+    errno = olderrno;
+}
+```
+
+*图 8-37 signal2：图 8-36 的一个改进版本，它能够正确解决信号不会排队等待的情况*
+
+当我们在 Linux 系统上运行 signal2 时，它现在可以正确地回收所有的僵死子进程了：
+
+```c
+linux> ./signal2
+Hello from child 15237
+Hello from child 15238
+Hello from child 15239
+Handler reaped child
+Handler reaped child
+Handler reaped child
+CR
+Parent processing input
+```
 ##### 练习题 8.8
 
 下面这个程序的输出是什么？

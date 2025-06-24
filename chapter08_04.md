@@ -334,4 +334,258 @@ int main(int argc, char **argv)
 > **主要原因：**要保证程序恢复到“调用 `Sigprocmask(SIG_BLOCK, &mask_one, &prev_one);` 前的状态”，而不是盲目取消所有阻塞。这样可以避免误伤，如果在程序其他地方也主动屏蔽了某些信号（例如 `SIGINT`），盲目恢复可能会导致信号提前到达。
 >
 > 
+## 8.6 非本地跳转
+
+`longjmp` 和 `siglongjmp` 是两种用于非正常流程控制的函数，它们通常用于从一个 `setjmp` 调用返回，并可以跳转到 `setjmp` 被调用时保存的程序状态。这些函数对于实现错误处理、异常处理和信号处理等功能非常有用。
+
+### 1. **`longjmp` 和 `setjmp`**
+
+`longjmp` 和 `setjmp` 是标准库函数，主要用于非局部跳转。在 C 语言中，`setjmp` 和 `longjmp` 提供了一种类似于异常处理的机制，允许你从一个深层嵌套的函数调用中跳出，并且返回到先前保存的状态。
+
+#### `setjmp`：
+
+`setjmp` 用来保存当前的程序状态（堆栈、寄存器等），并将该状态存储到 `jmp_buf` 类型的变量中。如果 `setjmp` 返回 0，表示程序正常执行，如果跳转回来则返回非 0 值。
+
+```c
+int setjmp(jmp_buf env);
+```
+
+- **`env`**：保存程序状态的缓冲区（`jmp_buf` 类型），用于以后恢复程序的状态
+
+#### `longjmp`：
+
+`longjmp` 用来跳回到先前通过 `setjmp` 保存的状态。跳回时，`setjmp` 会返回一个非 0 的值，并且 `longjmp` 会将控制权交给调用 `setjmp` 的地方。
+
+```c
+void longjmp(jmp_buf env, int retval);
+```
+
+- **`env`**：存储程序状态的缓冲区，`longjmp` 会恢复到该状态。
+
+- **`retval`**：`longjmp` 返回时给 `setjmp` 的返回值。通常，`retval` 是非零值，表示发生了跳转。
+
+使用示例：
+
+```c
+#include <stdio.h>
+#include <setjmp.h>
+
+jmp_buf env;
+
+void func() {
+    printf("In func, calling longjmp\n");
+    longjmp(env, 1);  // 从 func 跳回 setjmp
+}
+
+int main() {
+    if (setjmp(env) == 0) {
+        printf("First time through setjmp\n");
+        func();  // 会跳转到 longjmp
+    } else {
+        printf("Returned from longjmp\n");
+    }
+    return 0;
+}
+
+```
+
+输出：
+
+```c
+First time through setjmp
+In func, calling longjmp
+Returned from longjmp
+```
+
+2. **`siglongjmp` 和 `sigsetjmp`**
+
+`siglongjmp` 和 `sigsetjmp` 是与信号处理相关的版本，特别用于在处理信号时进行非局部跳转。它们与 `longjmp` 和 `setjmp` 类似，但是增加了信号掩码的管理，这在信号处理程序中尤其重要。`siglongjmp` 会跳转到一个由 `sigsetjmp` 保存的点，并可以恢复信号掩码。
+
+`sigsetjmp` 是一个扩展的版本，它除了保存程序的状态（如 `setjmp`）外，还会保存当前的信号掩码。这使得我们可以控制信号在跳转时的行为，特别是在信号处理程序中。
+
+```c
+int sigsetjmp(sigjmp_buf env, int savesigs);
+```
+
+- **`env`**：保存程序状态的缓冲区，`sigjmp_buf` 类型。它保存了堆栈信息和信号掩码。
+- **`savesigs`**：如果 `savesigs` 是非零值，`sigsetjmp` 会保存当前的信号掩码（也就是信号阻塞的状态）。如果 `savesigs` 为零，信号掩码不会被保存。
+
+#### `siglongjmp`：
+
+`siglongjmp` 与 `longjmp` 类似，但是它在跳转时会恢复信号掩码，从而确保信号的处理状态是正确的。
+
+```c
+void siglongjmp(sigjmp_buf env, int retval);
+```
+
+- **`env`**：保存程序状态的缓冲区，`sigjmp_buf` 类型，保存堆栈信息和信号掩码。
+- **`retval`**：跳转时传给 `sigsetjmp` 的返回值，通常是非零值。
+
+使用示例：当用户在键盘上键入Ctrl十C时，这个程序用信号和非本地跳转来实现软重启
+
+```c
+/* $begin restart */
+#include "csapp.h"
+
+sigjmp_buf buf;
+
+void handler(int sig) 
+{
+    siglongjmp(buf, 1);
+}
+
+int main() 
+{
+    if (!sigsetjmp(buf, 1)) {
+        Signal(SIGINT, handler);
+	Sio_puts("starting\n");
+    }
+    else 
+	Sio_puts("restarting\n");
+
+    while(1) {
+	Sleep(1);
+	Sio_puts("processing...\n");
+    }
+    exit(0); /* Control never reaches here */
+}
+/* $end restart */
+```
+
+输出：
+
+```
+linux> ./restart 
+starting
+processing... 
+processing.. 
+Ctrl+c
+restarting 
+processing... 
+Ctrl+c
+restarting 
+processing..
+```
+
+示例：通过 `SIGUSR1` 控制其他进程执行某些功能
+
+假设我们有两个进程，一个作为“控制进程”来发送信号，另一个作为“目标进程”来接收信号并执行特定功能。
+
+#### 1. 目标进程：接收信号并执行功能
+
+```c++
+#include <iostream>
+#include <csignal>
+#include <unistd.h>
+
+void signal_handler(int sig) {
+    if (sig == SIGUSR1) {
+        std::cout << "Received SIGUSR1: Executing custom function!" << std::endl;
+        // 这里可以执行其他功能，如修改变量、执行特定任务等
+    }
+}
+
+int main() {
+    // 注册 SIGUSR1 信号的处理程序
+    signal(SIGUSR1, signal_handler);
+
+    std::cout << "Target process running. PID: " << getpid() << std::endl;
+    
+    // 持续运行，等待信号
+    while (true) {
+        pause();  // 暂停，等待信号
+    }
+
+    return 0;
+}
+
+```
+
+python版本：
+
+```python
+import signal
+import os
+import time
+
+
+# 信号处理函数
+def signal_handler(signum, frame):
+    if signum == signal.SIGUSR1:
+        print("Received SIGUSR1: Executing custom function!")
+        # 执行自定义功能，比如更改变量或执行任务
+
+
+def target_process():
+    # 注册 SIGUSR1 信号的处理程序
+    signal.signal(signal.SIGUSR1, signal_handler)
+
+    print(f"Target process running. PID: {os.getpid()}")
+
+    # 持续运行，等待信号
+    while True:
+        time.sleep(1)  # 让进程持续运行，等待信号
+
+
+if __name__ == "__main__":
+    target_process()
+```
+
+2. 控制进程：发送信号到目标进程
+
+```c++
+#include <iostream>
+#include <csignal>
+#include <unistd.h>
+
+int main() {
+    pid_t target_pid;
+
+    // 获取目标进程的 PID
+    std::cout << "Enter target process PID: ";
+    std::cin >> target_pid;
+
+    // 发送 SIGUSR1 信号给目标进程
+    if (kill(target_pid, SIGUSR1) == 0) {
+        std::cout << "Signal SIGUSR1 sent to process " << target_pid << std::endl;
+    } else {
+        std::cerr << "Failed to send signal to process " << target_pid << std::endl;
+    }
+
+    return 0;
+}
+
+```
+
+python版本：
+
+```python
+import signal
+import os
+import time
+
+
+# 信号处理函数
+def signal_handler(signum, frame):
+    if signum == signal.SIGUSR1:
+        print("Received SIGUSR1: Executing custom function!")
+        # 执行自定义功能，比如更改变量或执行任务
+
+
+def target_process():
+    # 注册 SIGUSR1 信号的处理程序
+    signal.signal(signal.SIGUSR1, signal_handler)
+
+    print(f"Target process running. PID: {os.getpid()}")
+
+    # 持续运行，等待信号
+    while True:
+        time.sleep(1)  # 让进程持续运行，等待信号
+
+
+if __name__ == "__main__":
+    target_process()
+
+```
+
 

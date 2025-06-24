@@ -425,3 +425,273 @@ A. 这个程序会产生多少输出行？
 B. 这些输出行的一种可能的顺序是什么？
 
 > 任何对应有进程图的拓扑排序的输出序列都是可能的。例如：Hello、1、0、Bye、2、Bye 是可能的。
+### 8.4.4 让进程休眠
+
+sleep函数将一个进程挂起一段指定的时间。
+
+```c
+#include <unistd.h>
+unsigned int sleep(unsigned int secs);
+
+// 返回：还要休眠的秒数。
+```
+
+> 如果请求的时间量已经到了，sleep 返回 0，如果因为 sleep 函数被一个信号中断而过早地返回，则返回还剩下的要休眠的秒数。
+
+另一个很有用的函数是 pause 函数，**<u>该函数让调用函数休眠，直到该进程收到一个信号。</u>**
+
+```c
+#include <unistd.h>
+int pause(void);
+
+// 总是返回 -1。
+```
+
+#### 练习题 8.5
+
+编写一个 sleep 的包装函数，叫做 snooze，带有下面的接口：
+
+```c
+unsigned int snooze(unsigned int secs);
+```
+
+snooze 函数和 sleep 函数的行为完全一样，除了它会打印出一条消息来描述进程实际休眠了多长时间：
+
+```c
+Slept for 4 of 5 secs.
+```
+
+> ```c
+> unsigned int snooze(unsigned int sec){
+>     unsigned int rc = sleep(secs);
+>     printf("Sleot for %d of %d secs.",secs-rc,secs);
+>     return rc;
+> }
+> ```
+
+### 8.4.5 加载并运行程序（execve）
+
+execve 函数在当前进程的上下文中加载并运行一个新程序。
+
+```c
+#include <unistd.h>
+int execve(const char *filename, const char *argv[],
+           const char *envp[]);
+
+// 如果成功，则不返回，如果错误，则返回 -1。
+```
+
+execve 函数加载并运行可执行目标文件 filename，且带参数列表 argv 和环境变量列表 envp。只有当出现错误时，例如找不到 filename，execve 才会返回到调用程序。所以，与 fork—次调用返回两次不同，execve 调用一次并从不返回。
+
+参数列表是用图 8-20 中的数据结构表示的。argv 变量指向一个以 null 结尾的指针数组，其中每个指针都指向一个参数字符串。按照惯例，argv[0] 是可执行目标文件的名字。
+
+<img src="https://github.com/wangfud/CSAPP_note_0611/raw/master/.gitbook/assets/0820-can-shu-lie-biao-de-zu-zhi-jie-gou-.png" alt="图 8-20 参数列表的组织结构" style="zoom:67%;" />
+
+环境变量的列表是由一个类似的数据结构表示的，如图 8-21 所示。envp 变量指向一个以 null 结尾的指针数组，其中每个指针指向一个环境变量字符串，每个串都是形如 “name=value” 的名字—值对。
+
+<img src="https://github.com/wangfud/CSAPP_note_0611/raw/master/.gitbook/assets/0821-huan-jing-bian-liang-lie-biao-de-zu-zhi-jie-gou-.png" alt="图 8-21 环境变量列表的组织结构" style="zoom:67%;" />
+
+在 execve 加载了 filename 之后，它调用 7.9 节中描述的启动代码。启动代码设置栈，并将控制传递给新程序的主函数，该主函数有如下形式的原型
+
+```c
+int main(int argc, char **argv, char **envp);
+```
+
+或者等价的
+
+```c
+int main(int argc, char *argv[], char *envp[]);
+```
+
+main 函数有 3 个参数：
+
+1. argc，它给出 argv[ ] 数组中非空指针的数量；
+2. argv，指向 argv[ ] 数组中的第一个条目；
+3. envp，指向 envp[ ] 数组中的第一个条目。
+
+当 main 开始执行时，用户栈的组织结构如图 8-22 所示。
+
+<img src="https://github.com/wangfud/CSAPP_note_0611/raw/master/.gitbook/assets/0822-yi-ge-xin-cheng-xu-kai-shi-shi-yong-hu-zhan-de-dian-xing-zu-zhi-jie-gou-.png" alt="图 8-22 一个新程序开始时，用户栈的典型组织结构" style="zoom:50%;" />
+
+在栈的顶部是系统启动函数 libc_start_main（见 7.9 节）的栈帧。
+
+Linux 提供了几个函数来操作环境数组：
+
+```c
+#include <stdlib.h>
+char *getenv(const char *name);
+
+// 返回：若存在则为指向 name 的指针，若无匹配的，则为 NULL。
+//getenv 函数在环境数组中搜索字符串 “name=value”。如果找到了，它就返回一个指向 value 的指针，否则它就返回 NULL。
+
+
+//如果环境数组包含一个形如 “name=oldva1ue” 的字符串，那么 unsetenv 会删除它，而 setenv 会用 newvalue 代替 oldvalue，但是只有在 overwirte 非零时才会这样。如果 name 不存在，那么 setenv 就把 “name=newvalue” 添加到数组中。
+int setenv(const char *name, const char *newvalue, int overwrite);
+// 返回：若成功则为 0，若错误则为 -1。
+
+void unsetenv(const char *name);
+// 返回：无。
+
+```
+
+
+
+
+
+
+
+
+
+WUNTRACED 是 Unix/Linux 系统中 waitpid() 系统调用的一个选项常量，用于让父进程能够接收到子进程被暂停（stopped）时的通知。
+
+> 当子进程被 信号（如 SIGSTOP）暂停，默认情况下 waitpid() 并不会返回。但如果你传入了 WUNTRACED，则可以捕捉这个暂停事件。 
+
+```c
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <signal.h>
+
+int main() {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        // 子进程休眠，然后被手动暂停（例如用 kill -STOP <pid>）
+        while (1) pause();  // 一直等待信号
+    } else {
+        int status;
+        printf("父进程等待子进程暂停...\n");
+
+        // 等待子进程被暂停（例如被 SIGSTOP 信号暂停）
+        waitpid(pid, &status, WUNTRACED);
+
+        if (WIFSTOPPED(status)) {
+            printf("子进程已被暂停，信号编号: %d\n", WSTOPSIG(status));
+        }
+    }
+
+    return 0;
+}
+
+```
+
+### 8.4.6 利用 fork 和 execve 运行程序
+
+图 8-23 展示了一个简单 shell 的 main 例程。shell 打印一个命令行提示符，等待用户在 stdin 上 输入命令行，然后对这个命令行求值。
+
+```c
+#include "csapp.h"
+#define MAXARGS 128
+
+/* Function prototypes */
+void eval(char *cmdline);
+int parseline(char *buf, char **argv);
+int builtin_command(char **argv);
+
+int main()
+{
+    char cmdline[MAXLINE]; /* Command line */
+
+    while (1) {
+        /* Read */
+        printf("> ");
+        Fgets(cmdline, MAXLINE, stdin);
+        if (feof(stdin))
+            exit(0);
+
+        /* Evaluate */
+        eval(cmdline);
+    }
+}
+```
+
+图 8-24 展示了对命令行求值的代码。
+
+```c
+/* eval - Evaluate a command line */
+void eval(char *cmdline)
+{
+    char *argv[MAXARGS]; /* Argument list execve() */
+    char buf[MAXLINE];   /* Holds modified command line */
+    int bg;              /* Should the job run in bg or fg? */
+    pid_t pid;           /* Process id */
+
+    strcpy(buf, cmdline);
+    bg = parseline(buf, argv);
+    if (argv[0] == NULL)
+        return;   /* Ignore empty lines */
+
+    if (!builtin_command(argv)) {
+        if ((pid = Fork()) == 0) {   /* Child runs user job */
+            if (execve(argv[0], argv, environ) < 0) {
+                printf("%s: Command not found.\n", argv[0]);
+                exit(0);
+            }
+        }
+
+        /* Parent waits for foreground job to terminate */
+        if (!bg) {
+            int status;
+            if (waitpid(pid, &status, 0) < 0)
+                unix_error("waitfg: waitpid error");
+            }
+        else
+            printf("%d %s", pid, cmdline);
+    }
+    return;
+}
+
+/* If first arg is a builtin command, run it and return true */
+int builtin_command(char **argv)
+{
+    if (!strcmp(argv[0], "quit")) /* quit command */
+        exit(0);
+    if (!strcmp(argv[0], "&"))    /* Ignore singleton & */
+        return 1;
+    return 0;                     /* Not a builtin command */
+}
+```
+
+图 8-25 parseline 解析 shell 的一个输入行
+
+```c
+/* parseline - Parse the command line and build the argv array */
+int parseline(char *buf, char **argv)
+{
+    char *delim;         /* Points to first space delimiter */
+    int argc;            /* Number of args */
+    int bg;              /* Background job? */
+
+    buf[strlen(buf)-1] = ' ';  /* Replace trailing '\n' with space */
+    while (*buf && (*buf == ' ')) /* Ignore leading spaces */
+        buf++;
+
+    /* Build the argv list */
+    argc = 0;
+    while ((delim = strchr(buf, ' '))) {
+        argv[argc++] = buf;
+        *delim = '\0';
+        buf = delim + 1;
+        while (*buf && (*buf == ' ')) /* Ignore spaces */
+            buf++;
+    }
+    argv[argc] = NULL;
+
+    if (argc == 0) /* Ignore blank line */
+        return 1;
+
+    /* Should the job run in the background? */
+    if ((bg = (*argv[argc-1] == '&')) != 0)
+        argv[--argc] = NULL;
+
+    return bg;
+}
+```
+
+如果最后一个参数是一个 “&” 字符，那么 parseline 返回 1，表示应该在后台执行该程序（shell 不会等待它完成）。否则，它返回 0，表示应该在前台执行这个程序（shell 会等待它完成）
+
+在解析了命令行之后，eval 函数调用 builtin_command 函数，该函数检查第一个命令行参数是否是一个内置的 shell 命令。如果是，它就立即解释这个命令，并返回值 1。否则返回 0。简单的 shell 只有一个内置命令—— quit 命令，该命令会终止 shell。实际使用的 shell 有大量的命令，比如 pwd、jobs 和 fg。
+
+如果 builtin_cornnand 返回 0，那么 shell 创建一个子进程，并在子进程中执行所请求的程序。如果用户要求在后台运行该程序，那么 shell 返回到循环的顶部，等待下一个命令行。否则，shell 使用 waitpid 函数等待作业终止。当作业终止时，shell 就开始下一轮迭代。
+

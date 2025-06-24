@@ -447,4 +447,117 @@ Sigprocmask(SIG_SETMASK, &prev_mask, NULL);
 > # 关键代码
 > signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
 > ```
+### 8.5.5 编写信号处理程序
 
+信号处理是 Linux 系统编程最棘手的一个问题。处理程序有几个属性使得它们很难推理分析：
+
+1. 处理程序与主程序并发运行，共享同样的全局变量，因此可能与主程序和其他处理程序互相干扰；
+2. 如何以及何时接收信号的规则常常有违人的直觉；
+3. 不同的系统有不同的信号处理语义。
+
+#### 1. 安全的信号处理
+
+信号处理程序很麻烦是因为它们和主程序以及其他信号处理程序并发地运行，正如我们在图 8-31 中看到的那样。如果处理程序和主程序并发地访问同样的全局数据结构，那么结果可能就不可预知，而且经常是致命的。
+
+这里我们的目标是给你一些保守的编写处理程序的原则，使得这些处理程序能安全地并发运行。
+
+- **G0. 处理程序要尽可能简单。**避免麻烦的最好方法是保持处理程序尽可能小和简单。例如，处理程序可能只是简单地设置全局标志并立即返回；所有与接收信号相关的处理都由主程序执行，它周期性地检查（并重置）这个标志。
+- **G1. 在处理程序中只调用异步信号安全的函数。所谓异步信号安全**的函数（或简称安全的函数）能够被信号处理程序安全地调用，原因有二：要么它是可重入的（例如只访问局部变量，见 12.7.2 节），要么它不能被信号处理程序中断。图 8-33 列出了 Linux 保证安全的系统级函数。注意，许多常见的函数（例如 printf、sprintf、malloc 和 exit）都不在此列。
+
+| _Exit         | fexecve     | poll              | sigqueue         |
+| ------------- | ----------- | ----------------- | ---------------- |
+| _exit         | fork        | posix_trace_event | sigset           |
+| abort         | fstat       | pselect           | sigsuspend       |
+| accept        | fstatat     | raise             | sleep            |
+| access        | fsync       | read              | sockatmark       |
+| aio_error     | ftruncate   | readlink          | socket           |
+| aio_return    | futimens    | readlinkat        | socketpair       |
+| aio_suspend   | getegid     | recv              | stat             |
+| alarm         | geteuid     | recvfrom          | symlink          |
+| bind          | getgid      | recvmsg           | symlinkat        |
+| cfgetispeed   | getgroups   | rename            | tcdrain          |
+| cfgetospeed   | getpeername | renameat          | tcflow           |
+| cfsetispeed   | getpgrp     | rmdir             | tcflush          |
+| cfsetospeed   | getpid      | select            | tcgetattr        |
+| chdir         | getppid     | sem_post          | tcgetpgrp        |
+| chmod         | getsockname | send              | tcsendbreak      |
+| chown         | getsockopt  | sendmsg           | tcsetattr        |
+| clock_gettime | getuid      | sendto            | tcsetpgrp        |
+| close         | kill        | setgid            | time             |
+| connect       | link        | setpgid           | timer_getoverrun |
+| creat         | linkat      | setsid            | timer_gettime    |
+| dup           | listen      | setsockopt        | timer_settime    |
+| dup2          | lseek       | setuid            | times            |
+| execl         | lstat       | shutdown          | umask            |
+| execle        | mkdir       | sigaction         | uname            |
+| execv         | mkdirat     | sigaddset         | unlink           |
+| execve        | mkfifo      | sigdelset         | unlinkat         |
+| faccessat     | mkfifoat    | sigemptyset       | utime            |
+| fchmod        | mknod       | sigfillset        | utimensat        |
+| fchmodat      | mknodat     | sigismember       | utimes           |
+| fchown        | open        | signal            | wait             |
+| fchownat      | openat      | sigpause          | waitpid          |
+| fcntl         | pause       | sigpending        | write            |
+| fdatasync     | pipe        | sigprocmask       |                  |
+
+*图 8-33 异步信号安全的函数（来源：man 7 signal。数据来自 Linux Foundation）*
+
+信号处理程序中产生输出唯一安全的方法是使用 write 函数（见 10.1 节）。<u>特别地，调用 printf 或 sprintf 是不安全的</u>。为了绕开这个不幸的限制，我们开发一些安全的函数，称为 SIO（安全的 I/O）包，可以用来在信号处理程序中打印简单的消息。
+
+```c
+#include "csapp.h"
+
+ssize_t sio_putl(long v);
+ssize_t sio_puts(char s[]);
+// 返回：如果成功则为传送的字节数，如果出错，则为 -1。
+
+void sio_error(char s[]);
+// 返回：空。
+
+ssize_t sio_puts(char s[]) /* Put string */
+{
+    return write(STDOUT_FILENO, s, sio_strlen(s));
+}
+
+ssize_t sio_putl(long v) /* Put long */
+{
+    char s[128];
+
+    sio_ltoa(v, s, 10); /* Based on K&R itoa() */
+    return sio_puts(s);
+}
+
+void sio_error(char s[]) /* Put error message and exit */
+{
+    sio_puts(s);
+    _exit(1);
+}
+```
+
+图 8-35 给出了图 8-30 中 SIGINT 处理程序的一个安全的版本。
+
+```c
+#include "csapp.h"
+
+void sigint_handler(int sig) /* Safe SIGINT handler */
+{
+    Sio_puts("Caught SIGINT!\n"); /* Safe output */
+    _exit(0);                     /* Safe exit */
+}
+```
+
+- **G2. 保存和恢复 errno。**许多 Linux 异步信号安全的函数都会在出错返回时设置 errno。在处理程序中调用这样的函数可能会干扰主程序中其他依赖于 errno 的部分。解决方法是在进入处理程序时把 errno 保存在一个局部变量中，在处理程序返回前恢复它。**<u>注意，只有在处理程序要返回时才有此必要</u>**。如果处理程序调用 _exit 终止该进程，那么就不需要这样做了。
+
+- **G3. 阻塞所有的信号，保护对共享全局数据结构的访问。**<u>如果处理程序和主程序或其他处理程序共享一个全局数据结构，那么在访问（读或者写）该数据结构时，你的处理程序和主程序应该暂时阻塞所有的信号。</u>这条规则的原因是从主程序访问一个数据结构 d 通常需要一系列的指令，如果指令序列被访问次的处理程序中断，那么处理程序可能会发现 d 的状态不一致，得到不可预知的结果。在访问 d 时暂时阻塞信号保证了处理程序不会中断该指令序列。
+
+- **G4. 用 volatile 声明全局变量。**考虑一个处理程序和一个 main 函数，它们共享一个全局变量 g。处理程序更新 g，main 周期性地读 g。对于一个优化编译器而言，main 中 g 的值看上去从来没有变化过，因此使用缓存在寄存器中 g 的副本来满足对 g 的每次引用是很安全的。如果这样，main 函数可能永远都无法看到处理程序更新过的值。
+
+  <u>可以用 volatile 类型限定符来定义一个变量，告诉编译器不要缓存这个变量</u>。例如：
+
+  **`volatile int g;`**
+
+  > volatile 限定符强迫编译器每次在代码中引用 g 时，都要从内存中读取 g 的值。一般来说，和其他所有共享数据结构一样，应该暂时阻塞信号，保护每次对全局变量的访问。
+
+- **G5. 用 sig_atomic_t 声明标志。在常见的处理程序设计中，处理程序会写全局标志**来记录收到了信号。主程序周期性地读这个标志，响应信号，再清除该标志。对于通过这种方式来共享的标志，<u>C 提供一种整型数据类型 sig_atomic_t，对它的读和写保证会是原子的（不可中断的）</u>，因为可以用一条指令来实现它们：
+
+  **`volatile sig_atomic_t flag;`**
